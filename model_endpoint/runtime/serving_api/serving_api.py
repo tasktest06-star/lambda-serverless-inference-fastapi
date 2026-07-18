@@ -22,22 +22,20 @@ async def root() -> dict:
     return {"message": "Hello World"}
 
 
-@app.get("/question")
-async def get_answer(question: str, context: str) -> dict:
+@app.get("/predict")
+async def get_prediction(input_val: float) -> dict:
     """
-    **Endpoint implementing the question-answering logic.**
+    Endpoint for linear-regression inference.
 
-    ```
     Args:
-        question (str): Question to be answered. Answer should be included in 'context'.
-        context (str): Context containing information necessary to answer 'question'.
+        input_val: Numeric feature to predict on.
     Returns:
-        dict: Dictionary containing the answer to the question along with some metadata.
-    ```
+        dict with the model prediction.
     """
-    from custom_lambda_utils.scripts.inference import question_answerer
+    from custom_lambda_utils.scripts.inference import predict
 
-    return question_answerer(question=question, context=context)
+    prediction = predict(input_val)
+    return {"input": input_val, "prediction": float(prediction[0])}
 
 
 def lambda_handler(event, context):

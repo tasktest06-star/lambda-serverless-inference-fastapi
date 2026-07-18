@@ -1,3 +1,5 @@
-fastapi==0.79.0
-mangum==0.15.1
-transformers[torch]==4.21.1
+numpy 
+scikit-learn 
+joblib
+fastapi
+mangum
