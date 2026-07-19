@@ -1,203 +1,189 @@
-# Deploy an ML serverless inference endpoint using FastAPI, AWS Lambda and AWS CDK
+# Serverless ML Inference with FastAPI, AWS Lambda, and CDK
+
+Deploy a scikit-learn linear regression model behind a FastAPI endpoint on AWS Lambda (container image) with API Gateway, using AWS CDK.
+
+During the Docker image build, `train_predict.py` trains a simple model on synthetic data and saves `model.pkl`. At runtime, `GET /predict` loads that artifact and returns a prediction.
 
 ## Architecture
-![Architecture](docs/assets/architecture.png)
+
+```
+Client → API Gateway → Lambda (Docker) → FastAPI (Mangum) → inference.predict() → model.pkl
+```
+
+Key pieces:
+
+| Path | Role |
+|------|------|
+| `model_endpoint/docker/Dockerfile` | Lambda container image |
+| `model_endpoint/docker/train_predict.py` | Train + save `model.pkl` at image build time |
+| `model_endpoint/runtime/serving_api/serving_api.py` | FastAPI routes + Lambda handler |
+| `model_endpoint/runtime/serving_api/custom_lambda_utils/scripts/inference.py` | Load model and run `predict` |
+| `fastapi_model_serving/fastapi_model_serving_stack.py` | CDK stack (Lambda + API Gateway) |
 
 ## Prerequisites
 
-Have Python3 installed, along with virtualenv for creating and managing virtual environments in Python.
-Install `aws-cdk v2` on your system in order to be able to use the aws-cdk CLI.
-Have Docker installed (and, for the deployment part, running!) on your local machine.
+- Python 3.10 (aligned with the Dockerfile base image)
+- AWS CLI configured (`aws configure`) with permissions for CDK, Lambda, API Gateway, and ECR
+- AWS CDK v2 (`npm install -g aws-cdk` or equivalent)
+- Docker installed and running (`docker ps`)
+- `make` (Git Bash / WSL on Windows)
 
-### Test if all necessary software is installed:
+Check versions:
 
-AWS CLI is needed. Login to your account and select the region where you want to deploy the solution.
-
-Python3 is needed. For this solution, we use Python3.8. Make sure that the Python version you use locally is consistent with the Python version specified in the Dockerfile.
 ```shell
 python3 --version
-```
-
-Check if virtualenv is installed for creating and managing virtual environments in Python. Strictly speaking, this is not a hard requirement, but it will make your life easier and helps following this blog post more easily.
-```shell
-python3 -m virtualenv --version
-```
-
-Check if cdk is installed. This will be used to deploy our solution.
-```shell
 cdk --version
-```
-
-Check if Docker is installed. Our solution will make your model accessible through a Docker image to your lambda. For building this image locally, we will need Docker.
-```shell
 docker --version
-```
-Also make sure it is up and running by running ```docker ps```.
-
-## How to structure your FastAPI project using AWS CDK
-
-We are using the following directory structure for our project (ignoring some boilerplate cdk code that is immaterial in the context of this blog post):
-
-```
-fastapi_model_serving
-│   
-└───.venv  
-│
-└───fastapi_model_serving
-│   │   __init__.py
-│   │   fastapi_model_serving_stack.py
-│   │   
-│   └───model_endpoint  
-│       └───docker
-│       │      Dockerfile
-│       │      serving_api.tar.gz
-│       │  
-│       └───runtime
-│            └───serving_api
-│                    requirements.txt  
-│                    serving_api.py
-│                └───custom_lambda_utils
-│                     └───model_artifacts
-│                            ...
-│                     └───scripts
-│                            inference.py
-│  
-└───templates
-│   └───api
-│   │     api.py    
-│   └───dummy
-│         dummy.py
-|
-└───scripts
-│   └───init-lambda-code.sh
-│   └───setup.sh
-│   └───update_notice.sh
-│      
-│   app.py
-│   cdk.json
-│   README.md
-│   requirements.txt
- 
+aws sts get-caller-identity
 ```
 
-The directory follows the recommended structure of cdk projects for Python. 
+Default deploy region is `eu-west-1` (`DEPLOYMENT_REGION` in `cdk.json`). Change that value if you want another region. The stack and Dockerfile use **x86_64**.
 
-The most important part of this repository is the ```fast_api_model_serving``` directory. It contains the code that will define the cdk stack and the resources that are going to be used for model serving.
+## Quick start
 
-`model_endpoint` directory:
-- contains all the assets necessary that will make up our serverless endpoint, i.e., Dockerfile to build the Docker image that AWS Lamdba will use, as well as the lambda function code that uses FastAPI to handle inference requests and route them to the correct endpoint, and the model artifacts of the model that we want to deploy.
+From the repo root:
 
-Inside model endpoint, we have the follwing struture... 
-- `docker` directory:
-    - which specifies a `Dockerfile` which is used to build the image for the Lambda function with all the artifacts (Lambda function code, model artifacts, ...) in the right place so that they can be used without issues.
-    - `Serving.api.tar.gz`: this is a tarball that contains all the assets from the runtime folder that are necessary for building the Docker image. More on how to create the tar.gz. file later in the next section.
-- `runtime` directory:
-    - contains the code for the `serving_api` Lambda function and it’s dependencies specified in the `requirements.txt` file
-    - as well as the `custom_lambda_utils` directory which includes an `inference` script that loads the necessary `model artifacts` so that the model can be passed to the `serving_api` that will then expose it as an endpoint
+### 1. Prepare the environment
 
+Creates `.venv` and installs root `requirements.txt` (CDK + tooling):
 
-Besides, we have the `template` directory which provides you with a template of folder structure and files where you can define your customised codes and APIs following the sample we went through above.
-
-- `template` directory: contains dummy code that can be used to create new lambda functions from 
-    - `dummy` contains the code that implements the structure of an ordinary AWS Lambda function using the Python runtime
-    - `api` contains the code that lambda that implements an AWS Lambda function that wraps a FastAPI endpoint around an existing API Gateway
-
-
-## Step-by-step walk-through: Deploying the solution
-
-NOTE: By default, the code is going to be deployed inside the eu-west-1 region. If you want to change the region to another region of your choice, you can change the `DEPLOYMENT_REGION` context variable in the `cdk.json` file.
-Beware, however, that the solution tries to deploy a lambda on top of the arm64 architecture, and that this feature might not be available in all regions at the time of your reading. In this case, you need to change the “architecture” parameter in the fastapi_model_serving_stack.py file, as well as the first line of the Dockerfile inside the model_endpoint > Docker directory, to host this solution on the x86 architecture.
-
-
-1)  First, run the following command to clone the git repository:
-`git clone https://github.com/aws-samples/lambda-serverless-inference-fastapi`
-Since we would like to showcase that the solution could work with model artifacts that you train locally, we contain a sample model artifact of a pretrained DistilBERT model on the Hugging Face model hub for question answering task in the `serving_api.tar.gz` file. Hence, the downloading time can take around **3 to 5 minutes**. 
-
-2) Now, let’s setup the environment to recreate the blog post. This step will download the pretrained model that will be deployed from the huggingface model hub into the `./model_endpoint/runtime/serving_api/custom_lambda_utils/model_artifacts` directory. It will also create a virtual environment and install all dependencies that are needed. You only need to run this command once:
-```shell 
+```shell
 make prep
 ```
-This command can take around **5 minutes** (depending on your internet bandwidth) because it needs to download the model artifacts.
 
+### 2. Package the Lambda API code
 
-3) The model artifacts need to be packaged inside a .tar.gz archive that will be used inside the docker image that is built in the cdk stack. You will need to run this code whenever you make changes to the model artifacts or the API itself to always have the most up-to-date version of your serving endpoint packaged:
+Builds `model_endpoint/docker/serving_api.tar.gz` from the serving runtime (FastAPI app, inference code, requirements):
+
 ```shell
 make package_model
 ```
-Finally, the artifacts are all in-place. Now we can move over to deploying the cdk stack to your AWS account.
 
+Re-run this whenever you change `serving_api.py`, `inference.py`, or `model_endpoint/runtime/serving_api/requirements.txt`.
 
-4) ```FIRST TIME CDK USERS ONLY```: If this is your first time deploying an AWS CDK app into an environment (account + region combination), you will need to bootstrap the environment, i.e., prepare it for use with `CDK`. This will create a stack that includes resources that are needed for the toolkit’s operation. For example, the stack includes an S3 bucket that is used to store templates and assets during the deployment process.
+### 3. Bootstrap CDK (first time only)
+
 ```shell
 make cdk_bootstrap
 ```
 
-5) Since we are building docker images locally in this cdk deployment, we need to ensure that the docker daemon is running before we are going to be able to deploy this stack via the cdk CLI. To check whether or not the docker daemon is running on your system, use the following command:
+### 4. Ensure Docker is running
+
 ```shell
 docker ps
 ```
-If you don’t get an error message, you should be good to deploy the solution. 
 
+### 5. Deploy
 
-6) Deploy the solution with the following command:
 ```shell
 make deploy
 ```
-This step can take around **5-10 minutes** due to building and pushing the docker image.
 
-## Running real-time inference
+This builds the Docker image (installs deps, runs training to create `model.pkl`, sets the Lambda handler), pushes it, and deploys the CloudFormation stack. Expect roughly **5–10 minutes**.
 
-### Using the API documentation in the browser
-After your `AWS CloudFormation` stack got deployed successfully, go to the `Outputs` section and open up the shown endpoint url. Now, our model is accessible via the endpoint url and we are ready to use it for real-time inference!
+When deploy finishes, copy the API Gateway URL from the stack **Outputs**.
 
-1) Go to the url to see if you can see `“hello world”` message and go to `{endpoint_url}/docs` to see if you can successfully load the interactive swagger UI page. Notice that there might be some coldstart time so you may need to wait or refresh a few times.
-![Swagger UI Docs](docs/assets/swagger_ui_docs.png)
+## Call the API
 
+### Browser / Swagger UI
 
-2) Once login to the landing page of FastAPI swagger UI page, you will be able to execute your endpoint via the root `/` or via the `/question` resources. From `/`, you could try it out and execute the API and get the `“hello world”` message. 
-From `/question`, you can try it out and execute the API and run ML inference on the model we deployed for the question answering case. Here is one example.
+1. Open the output URL — you should see `{"message":"Hello World"}` (cold starts may need a refresh).
+2. Open `{endpoint_url}/docs` for the interactive Swagger UI.
+3. Try `GET /predict` with a numeric `input_val` (for example `5.0`).
 
-The question is ```What is the color of my car now?``` and the context is ```My car used to be blue but I painted red.```
-![Question Answering Input Example](docs/assets/question_answering_input_example.png)
+### curl
 
-Once you click on `Execute`, based on the given context, the model will answer the question with response as below.
-![Model Response Example](docs/assets/model_response_example.png)
+```shell
+curl "https://<API_ID>.execute-api.<REGION>.amazonaws.com/prod/predict?input_val=5.0"
+```
 
-In the response body, you will be able to see the answer with the confidence score the model gives. You could also play around with other examples or embed the API in your existing application.
+Example response:
 
-### Real-time inference via code using the `requests` module
-Alternatively, you can run the inference via code. Here is one example written in Python, using the requests library:
+```json
+{"input":5.0,"prediction":14.978...}
+```
 
+### Python
 
 ```python
 import requests
 
-# optional header and payload vars
-headers = {}
-payload = {}
-
-url = "https://<YOUR_API_GATEWAY_ENDPOINT_ID>.execute-api.<YOUR_ENDPOINT_REGION>.amazonaws.com/prod/question?question=\"What is the color of my car now?\"&context=\"My car used to be blue but I painted red\""
-
-response = requests.request("GET", url, headers=headers, data=payload)
-
-print(response.text)
+url = "https://<API_ID>.execute-api.<REGION>.amazonaws.com/prod/predict"
+response = requests.get(url, params={"input_val": 5.0})
+print(response.json())
 ```
 
-This code snippet would output a string similar to the following:
-```python
-'{"score":0.6947233080863953,"start":38,"end":41,"answer":"red"}'
+## How the image is built
+
+The Dockerfile roughly does:
+
+1. Unpack `serving_api.tar.gz` into `${LAMBDA_TASK_ROOT}`
+2. Copy `train_predict.py` into `${LAMBDA_TASK_ROOT}`
+3. `pip install` from `requirements.txt` into `${LAMBDA_TASK_ROOT}`
+4. Train and write `model.pkl` under `${LAMBDA_TASK_ROOT}`
+5. Set `CMD` to `serving_api.lambda_handler`
+
+Inference loads the same path:
+
+```text
+${LAMBDA_TASK_ROOT}/model.pkl
 ```
 
-### Clean up
-Inside the root directory of your repository, run the following command to clean up your created resources:
+## Project layout
+
+```text
+.
+├── app.py
+├── cdk.json
+├── Makefile
+├── requirements.txt                 # local CDK / tooling deps
+├── fastapi_model_serving/
+│   └── fastapi_model_serving_stack.py
+├── model_endpoint/
+│   ├── docker/
+│   │   ├── Dockerfile
+│   │   ├── train_predict.py         # train at image build time
+│   │   └── serving_api.tar.gz       # created by make package_model
+│   └── runtime/
+│       └── serving_api/
+│           ├── serving_api.py       # FastAPI + Mangum
+│           ├── requirements.txt     # runtime deps (fastapi, mangum, sklearn, ...)
+│           └── custom_lambda_utils/
+│               └── scripts/
+│                   └── inference.py
+└── scripts/
+    └── setup.sh
+```
+
+## Useful Make targets
+
+| Command | Description |
+|---------|-------------|
+| `make prep` | Create venv and install deps |
+| `make package_model` | Build `serving_api.tar.gz` |
+| `make cdk_bootstrap` | First-time CDK bootstrap |
+| `make synth` | Synthesize CloudFormation |
+| `make deploy` | Build image and deploy stack |
+| `make destroy` | Tear down the stack |
+| `make clean` | Remove `.venv` and `cdk.out` |
+
+Full flow after a code change:
+
+```shell
+make package_model
+make deploy
+```
+
+## Clean up
+
 ```shell
 make destroy
 ```
 
-### Troubleshooting
+## Troubleshooting
 
-#### If you are a Mac User
-Error when logging into ECR with Docker login: ```"Error saving credentials ... not implemented".``` For example,
-exited with error code 1: Error saving credentials: error storing credentials - err: exit status 1,...dial unix backend.sock: connect: connection refused
-#### Solution
-Before you can use lambda on top of Docker containers inside cdk, it might be the case that you have got to change the ```~/docker/config.json``` file. More specifically, you might have to change the ```credsStore``` parameter in ```~/.docker/config.json``` to ```osxkeychain```. That solves Amazon ECR login issues on a Mac.
+- **Docker / ECR login issues on Mac** — if `docker login` to ECR fails with credential store errors, set `credsStore` to `osxkeychain` in `~/.docker/config.json`.
+- **Cold start** — first request after deploy or idle time can be slow; retry once or twice.
+- **Stale API code in the image** — you changed Python under `runtime/serving_api` but forgot `make package_model` before `make deploy`.
+- **Train step fails in Docker with `ModuleNotFoundError`** — the Dockerfile uses `PYTHONPATH=${LAMBDA_TASK_ROOT}` when running `train_predict.py` so packages installed with `--target` are visible.
+- **Windows** — run Make targets from Git Bash or WSL so `scripts/setup.sh` and `.venv/bin/activate` work.

@@ -1,0 +1,26 @@
+
+
+after deployment execution notes :--
+
+
+get the api gateway url
+    CloudFormation 
+    Stacks
+    FastapiModelServingStacktsStack
+
+
+https://hosi33zb98.execute-api.us-east-1.amazonaws.com/prod/
+
+https://<api-id>.execute-api.<region>.amazonaws.com/prod/
+
+--add the api request over browser 
+API_URL/predict?input_val=5.0
+
+https://<api-id>.execute-api.<region>.amazonaws.com/prod/
+
+
+--add the api request over browser
+https://hosi33zb98.execute-api.us-east-1.amazonaws.com/prod/predict?input_val=5.0
+
+
+
