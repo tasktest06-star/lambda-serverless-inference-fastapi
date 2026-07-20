@@ -1,49 +1,50 @@
-import * as path from 'path';
-import { Size, Duration, Stack, StackProps, RemovalPolicy } from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
-import * as dynamodb from 'aws-cdk-lib/aws-dynamodb'; // <-- Added import
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as path from 'path';
 
-export class FastapiModelServingStacktsStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
+export class ModelServingStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // 1. Create the DynamoDB table to store API responses
-    const responseTable = new dynamodb.Table(this, 'ApiResponseTable', {
-      tableName: 'FastApiResponses',
-      partitionKey: { name: 'requestId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy: RemovalPolicy.DESTROY, // Change to RETAIN for production
+    // 1. S3 Bucket for Training Data
+    const trainingDataBucket = new s3.Bucket(this, 'TrainingDataBucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true, // Automatically empty bucket on stack teardown
     });
 
-    // Docker-based Lambda function with 4GB Ephemeral Storage and 2GB RAM[cite: 1]
-    const fastapiModelEndpointLambda = new lambda.DockerImageFunction(
-      this,
-      'fastapi_model_serving_endpoint',
-      {
-        functionName: 'fastapi_model_serving_endpoint_docker', //[cite: 1]
-        architecture: lambda.Architecture.X86_64, //[cite: 1]
-        code: lambda.DockerImageCode.fromImageAsset(
-          path.join(__dirname, '..', 'model_endpoint', 'docker') //[cite: 1]
-        ),
-        timeout: Duration.seconds(60), //[cite: 1]
-        ephemeralStorageSize: Size.mebibytes(4096), //[cite: 1]
-        memorySize: 2048, //[cite: 1]
-        // 2. Pass the Table Name as an environment variable to FastAPI
-        environment: {
-          RESPONSE_TABLE_NAME: responseTable.tableName,
-        },
-      }
-    );
+    // 2. DynamoDB Table for API Responses
+    // Omitting 'tableName' allows CDK to generate a unique name safely
+    const responseTable = new dynamodb.Table(this, 'ApiResponseTable', {
+      partitionKey: { name: 'requestId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, 
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
-    // 3. Grant Lambda write permissions to the DynamoDB table
-    responseTable.grantWriteData(fastapiModelEndpointLambda);
+    // 3. Lambda Docker Image Function
+    const modelServingLambda = new lambda.DockerImageFunction(this, 'ModelServingFunction', {
+      // Points to the directory containing your Dockerfile
+      code: lambda.DockerImageCode.fromImageAsset(path.join(__dirname, '../app')),
+      memorySize: 1024, // Allocate enough memory for scikit-learn training
+      timeout: cdk.Duration.seconds(30), // Allow buffer for the initial S3 download & boot phase
+      environment: {
+        TRAINING_DATA_BUCKET: trainingDataBucket.bucketName,
+        TRAINING_DATA_KEY: 'training_data.csv',
+        RESPONSE_TABLE_NAME: responseTable.tableName,
+      },
+    });
 
-    // REST API Gateway acting as a proxy to route all traffic to FastAPI[cite: 1]
-    new apigateway.LambdaRestApi(this, 'docker_model_serving_endpoint', { //[cite: 1]
-      handler: fastapiModelEndpointLambda, //[cite: 1]
-      proxy: true, //[cite: 1]
+    // Grant IAM Permissions
+    trainingDataBucket.grantRead(modelServingLambda);
+    responseTable.grantWriteData(modelServingLambda);
+
+    // 4. API Gateway
+    new apigateway.LambdaRestApi(this, 'ModelServingApi', {
+      handler: modelServingLambda,
+      proxy: true, // Routes all paths and methods to the FastAPI app
     });
   }
 }

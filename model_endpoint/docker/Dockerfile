@@ -1,15 +1,16 @@
-FROM public.ecr.aws/lambda/python:3.10-x86_64
+# Use the official AWS Lambda Python 3.11 base image
+FROM public.ecr.aws/lambda/python:3.11
 
-# Copy function code[cite: 2]
-ADD serving_api.tar.gz ${LAMBDA_TASK_ROOT}[cite: 2]
+# Copy the requirements file and install dependencies
+COPY requirements.txt ${LAMBDA_TASK_ROOT}
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the script into the container[cite: 2]
-COPY train_predict.py ${LAMBDA_TASK_ROOT}[cite: 2]
+# Copy the top-level API script
+COPY serving_api.py ${LAMBDA_TASK_ROOT}
 
-# Install dependencies inside the container[cite: 2]
-RUN pip3 install -r ${LAMBDA_TASK_ROOT}/requirements.txt --target ${LAMBDA_TASK_ROOT}[cite: 2]
+# Copy the custom logic and inference scripts
+# Assuming your directory structure is: custom_lambda_utils/scripts/inference.py
+COPY custom_lambda_utils/ ${LAMBDA_TASK_ROOT}/custom_lambda_utils/
 
-# REMOVED: The RUN command for train_predict.py has been removed from here.
-
-# Define default command (overridable when running the container)[cite: 2]
-CMD [ "serving_api.lambda_handler" ][cite: 2]
+# Set the CMD to the handler inside serving_api.py
+CMD [ "serving_api.lambda_handler" ]
