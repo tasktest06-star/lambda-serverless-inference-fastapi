@@ -12,14 +12,12 @@ export class FastapiModelServingStacktsStack extends cdk.Stack {
 
     // 1. S3 Bucket for Training Data
     const trainingDataBucket = new s3.Bucket(this, 'TrainingDataBucket', {
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-      autoDeleteObjects: true, 
+      removalPolicy: cdk.RemovalPolicy.DESTROY, 
     });
 
     // 2. DynamoDB Table for API Responses
     const responseTable = new dynamodb.Table(this, 'ApiResponseTable', {
       partitionKey: { name: 'requestId', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST, 
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
