@@ -6,18 +6,18 @@ import uuid
 from fastapi import FastAPI
 from mangum import Mangum
 
-# Import at the top level ensures the model downloads and trains during container boot
-from custom_lambda_utils.scripts.inference import predict 
+from custom_lambda_utils.scripts.inference import download_model, predict 
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 app = FastAPI(root_path="/prod")
 
-# Initialize DynamoDB resource outside the handler for connection reuse
 dynamodb = boto3.resource('dynamodb')
 
-# Initialize Mangum OUTSIDE the handler so it only runs once per container
+# Trigger the model download from S3 during the container's cold start boot phase
+download_model()
+
 asgi_handler = Mangum(app)
 
 @app.get("/")
@@ -50,12 +50,10 @@ async def get_prediction(input_val: float) -> dict:
 def lambda_handler(event, context):
     logger.info(json.dumps(event))
 
-    # Call the globally initialized Mangum instance
     response = asgi_handler(event, context)
 
     logger.info(json.dumps(response))
 
-    # Log the Response to DynamoDB with 400KB safeguard
     table_name = os.environ.get("RESPONSE_TABLE_NAME")
     if table_name:
         try:
@@ -64,7 +62,6 @@ def lambda_handler(event, context):
             
             body_str = response.get('body', '{}')
             
-            # DynamoDB has a hard limit of 400KB per item. Truncate if it exceeds safe limits.
             if len(body_str.encode('utf-8')) > 350000:
                 body_str = '{"error": "Payload too large for DynamoDB"}'
             
